@@ -1448,18 +1448,24 @@ public class SemaphoreConcurrentLinkedDequeManagedConnectionPool implements Mana
                         {
                            ConnectionListenerWrapper clw = cls.remove(cl);
 
-                           if (pool.getInternalStatistics().isEnabled())
-                              pool.getInternalStatistics().deltaTotalPoolTime(System.currentTimeMillis() -
-                                 clw.getConnectionListener().getLastReturnedTime());
+                           if (clw != null) {
+                              if (pool.getInternalStatistics().isEnabled())
+                                 pool.getInternalStatistics()
+                                     .deltaTotalPoolTime(System.currentTimeMillis() -
+                                                         clw.getConnectionListener()
+                                                             .getLastReturnedTime());
 
-                           if (Tracer.isEnabled())
-                              Tracer.destroyConnectionListener(pool.getName(), this, clw.getConnectionListener(),
-                                                               false, false, true, false, false, false, false,
-                                                               Tracer.isRecordCallstacks() ?
-                                                               new Throwable("CALLSTACK") : null);
-                     
-                           removeConnectionListenerFromPool(clw);
-                           clw.getConnectionListener().destroy();
+                              if (Tracer.isEnabled())
+                                 Tracer.destroyConnectionListener(pool.getName(), this,
+                                     clw.getConnectionListener(),
+                                     false, false, true, false, false, false, false,
+                                     Tracer.isRecordCallstacks() ?
+                                     new Throwable("CALLSTACK") : null
+                                 );
+
+                              removeConnectionListenerFromPool(clw);
+                              clw.getConnectionListener().destroy();
+                           }
                            clw = null;
                            destroyed = true;
                            anyDestroyed = true;
@@ -1502,7 +1508,9 @@ public class SemaphoreConcurrentLinkedDequeManagedConnectionPool implements Mana
                   {
                      synchronized (cls)
                      {
-                        returnForFrequencyCheck(cl);
+                        if(cl != null && cls.containsKey(cl)) {
+                           returnForFrequencyCheck(cl);
+                        }
                      }
                   }
                }
