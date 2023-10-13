@@ -28,8 +28,10 @@ import org.jboss.jca.adapters.jdbc.spi.reauth.ReauthPlugin;
 import org.jboss.jca.adapters.jdbc.util.ReentrantLock;
 import org.jboss.jca.core.spi.transaction.ConnectableResource;
 import org.jboss.jca.core.spi.transaction.ConnectableResourceListener;
+import org.jboss.jca.core.connectionmanager.pool.mcp.NotifyingManagedConnection;
 
 import java.io.PrintWriter;
+import java.lang.invoke.MethodHandle;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -39,6 +41,7 @@ import java.sql.Statement;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -64,7 +67,7 @@ import org.jboss.logging.Messages;
  * @author <a href="mailto:wprice@redhat.com">Weston Price</a>
  * @author <a href="mailto:jesper.pedersen@ironjacamar.org">Jesper Pedersen</a>
  */
-public abstract class BaseWrapperManagedConnection implements ManagedConnection, ConnectableResource
+public abstract class BaseWrapperManagedConnection implements NotifyingManagedConnection, ConnectableResource
 {
    private static final WrappedConnectionFactory WRAPPED_CONNECTION_FACTORY;
 
@@ -132,6 +135,9 @@ public abstract class BaseWrapperManagedConnection implements ManagedConnection,
 
    /** Metadata */
    protected ManagedConnectionMetaData metadata;
+
+   /** optional implementations on the driver*/
+   private Optional<MethodHandle> requestBegin,requestEnd;
 
    static
    {
@@ -348,6 +354,15 @@ public abstract class BaseWrapperManagedConnection implements ManagedConnection,
       synchronized (stateLock)
       {
          jdbcAutoCommit = true;
+         if (jdbcAutoCommit != underlyingAutoCommit)
+         {
+            try {
+               con.setAutoCommit(jdbcAutoCommit);
+               underlyingAutoCommit = jdbcAutoCommit;
+            } catch (SQLException e) {
+               mcf.log.errorResettingAutoCommit(mcf.getJndiName(), e);
+            }
+         }
          jdbcReadOnly = readOnly;
          if (jdbcTransactionIsolation != transactionIsolation)
          {
@@ -1222,10 +1237,81 @@ public abstract class BaseWrapperManagedConnection implements ManagedConnection,
       return lc;
    }
 
+   protected Optional<MethodHandle> getEndRequestNotify()
+   {
+      return requestEnd;
+   }
+
+   protected void setEndRequestNotify(Optional<MethodHandle> endRequest)
+   {
+      requestEnd = endRequest;
+   }
+
+   protected Optional<MethodHandle> getBeginRequestNotify()
+   {
+      return requestBegin;
+   }
+
+   protected void setBeginRequestNotify(Optional<MethodHandle> beginRequest)
+   {
+      requestBegin = beginRequest;
+   }
 
    /**
     * Returns true if the underlying connection is handled by an XA resource manager
     * @return The value
     */
    public abstract boolean isXA();
+
+   public void notifyRequestBegin()
+   {
+      Optional<MethodHandle> mh = getBeginRequestNotify();
+      if (mh == null)
+      {
+         mh = lookupNotifyMethod("beginRequest");
+         setBeginRequestNotify(mh);
+      }
+      if (mh.isPresent())
+         invokeNotifyMethod(mh.get(), "beginRequest");
+   }
+
+   public void notifyRequestEnd()
+   {
+      Optional<MethodHandle> mh = getEndRequestNotify();
+      if (mh == null)
+      {
+         mh = lookupNotifyMethod("endRequest");
+         setEndRequestNotify(mh);
+      }
+      if (mh.isPresent())
+         invokeNotifyMethod(mh.get(), "endRequest");
+   }
+
+   private Optional<MethodHandle> lookupNotifyMethod(String methodName)
+   {
+      try
+      {
+         MethodHandle mh = SecurityActions.getMethodHandleInClassHierarchy(con.getClass(), methodName);
+         if (mh == null)
+            return Optional.empty();
+         else
+            return Optional.of(mh);
+      } catch (Exception e)
+      {
+         getLog().debugf("Unable to invoke %s#%s: %s", con.getClass(), methodName, e.getMessage());
+         return Optional.empty();
+      }
+   }
+
+   private void invokeNotifyMethod(MethodHandle mh, String methodName)
+   {
+      try
+      {
+         mh.invoke(getRealConnection());
+         getLog().debugf("java.sql.Connection#%s has been invoked", methodName);
+      } catch (Throwable t)
+      {
+         getLog().debugf("Unable to invoke java.sql.Connection#%s: %s", methodName, t.getMessage());
+      }
+   }
 }

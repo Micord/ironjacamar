@@ -1,6 +1,6 @@
 /*
  * IronJacamar, a Java EE Connector Architecture implementation
- * Copyright 2010, Red Hat Inc, and individual contributors
+ * Copyright 2021, Red Hat Inc, and individual contributors
  * as indicated by the @author tags. See the copyright.txt file in the
  * distribution for a full listing of individual contributors.
  *
@@ -22,14 +22,7 @@
 
 package org.jboss.jca.adapters.jdbc.extensions.oracle;
 
-import org.jboss.jca.adapters.jdbc.spi.ValidConnectionChecker;
-
-import java.io.Serializable;
-import java.lang.reflect.Method;
-import java.sql.Connection;
-import java.sql.SQLException;
-
-import org.jboss.logging.Logger;
+import org.jboss.jca.adapters.jdbc.extensions.novendor.JDBC4ValidConnectionChecker;
 
 /**
  * Implements a valid connection checker for Oracle
@@ -37,42 +30,16 @@ import org.jboss.logging.Logger;
  * @author <a href="mailto:abrock@redhat.com">Adrian Brock</a>
  * @author <a href="mailto:jesper.pedersen@ironjacamar.org">Jesper Pedersen</a>
  */
-public class OracleValidConnectionChecker implements ValidConnectionChecker, Serializable
+public class OracleValidConnectionChecker extends JDBC4ValidConnectionChecker
 {
    private static final long serialVersionUID = 1937054230333286884L;
-
-   private static Logger log = Logger.getLogger(OracleValidConnectionChecker.class);
 
    /**
     * Constructor
     */
    public OracleValidConnectionChecker()
    {
+      super();
    }
 
-   /**
-    * {@inheritDoc}
-    */
-   @Override
-   public SQLException isValidConnection(Connection c)
-   {
-      try
-      {
-         Method ping = SecurityActions.getMethod(c.getClass(), "pingDatabase", (Class<?>[])null);
-         SecurityActions.setAccessible(ping);
-
-         Integer status = (Integer) ping.invoke(c, (Object[])null);
-
-         // Error
-         if (status == null || status.intValue() < 0)
-            return new SQLException("pingDatabase failed status=" + status);
-      }
-      catch (Exception e)
-      {
-         return new SQLException("pingDatabase failed", e);
-      }
-
-      // OK
-      return null;
-   }
 }

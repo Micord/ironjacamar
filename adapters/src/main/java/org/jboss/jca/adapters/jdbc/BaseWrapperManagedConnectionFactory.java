@@ -1,6 +1,6 @@
 /*
  * IronJacamar, a Java EE Connector Architecture implementation
- * Copyright 2010, Red Hat Inc, and individual contributors
+ * Copyright 2021, Red Hat Inc, and individual contributors
  * as indicated by the @author tags. See the copyright.txt file in the
  * distribution for a full listing of individual contributors.
  *
@@ -47,8 +47,11 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
@@ -112,6 +115,22 @@ public abstract class BaseWrapperManagedConnectionFactory
    /** The bundle */
    protected static AdaptersBundle bundle = Messages.getBundle(AdaptersBundle.class);
 
+   private static boolean copyGssCredentials;
+
+   static
+   {
+      String c = SecurityActions.getSystemProperty("ironjacamar.jdbc.kerberos.copygsscredentials");
+
+      if (c != null)
+      {
+         copyGssCredentials = Boolean.valueOf(c);
+      }
+      else
+      {
+         copyGssCredentials = false;
+      }
+   }
+
    /** The resource adapter */
    private JDBCResourceAdapter jdbcRA;
 
@@ -132,6 +151,8 @@ public abstract class BaseWrapperManagedConnectionFactory
 
    /** Query timeout enabled */
    protected boolean doQueryTimeout = false;
+
+   protected boolean poolValidationLoggingEnabled = true;
 
    /**
     * The variable <code>newConnectionSQL</code> holds an SQL
@@ -154,6 +175,8 @@ public abstract class BaseWrapperManagedConnectionFactory
     */
    protected String validConnectionCheckerClassName;
 
+   private ClassLoader validConnectionCheckerClassLoader;
+
    private String validConnectionCheckerProperties;
 
    /**
@@ -173,6 +196,8 @@ public abstract class BaseWrapperManagedConnectionFactory
    /** The staleConnectionCheckerClassName */
    private String staleConnectionCheckerClassName;
 
+   private ClassLoader staleConnectionCheckerClassLoader;
+
    private String staleConnectionCheckerProperties;
 
    /**
@@ -181,6 +206,8 @@ public abstract class BaseWrapperManagedConnectionFactory
    protected final Properties staleConnectionCheckerProps = new Properties();
 
    private String exceptionSorterClassName;
+
+   private ClassLoader exceptionSorterClassLoader;
 
    private String exceptionSorterProperties;
 
@@ -495,11 +522,29 @@ public abstract class BaseWrapperManagedConnectionFactory
 
    /**
     * Set the stale connection checker class name
-    * @param value The value
+    * @param staleConnectionCheckerClassName The staleConnectionCheckerClassName
     */
-   public void setStaleConnectionCheckerClassName(String value)
+   public void setStaleConnectionCheckerClassName(String staleConnectionCheckerClassName)
    {
-      staleConnectionCheckerClassName = value;
+      this.staleConnectionCheckerClassName = staleConnectionCheckerClassName;
+   }
+
+   /**
+    * Get the stale connection checker module name
+    * @return The value
+    */
+   public ClassLoader getStaleConnectionClassLoader()
+   {
+      return staleConnectionCheckerClassLoader;
+   }
+
+   /**
+    * Set the stale connection checker module name
+    * @param staleConnectionCheckerClassLoader The staleConnectionCheckerModuleName
+    */
+   public void setStaleConnectionCheckerClassLoader(ClassLoader staleConnectionCheckerClassLoader)
+   {
+      this.staleConnectionCheckerClassLoader = staleConnectionCheckerClassLoader;
    }
 
    /**
@@ -564,6 +609,24 @@ public abstract class BaseWrapperManagedConnectionFactory
    }
 
    /**
+    * Get the exception sorter module name
+    * @return The value
+    */
+   public ClassLoader getExceptionSorterClassLoader()
+   {
+      return exceptionSorterClassLoader;
+   }
+
+   /**
+    * Set the exception sorter module name
+    * @param exceptionSorterClassLoader The value
+    */
+   public void setExceptionSorterClassLoader(ClassLoader exceptionSorterClassLoader)
+   {
+      this.exceptionSorterClassLoader = exceptionSorterClassLoader;
+   }
+
+   /**
     * Get the valid connection checker class name
     * @return The value
     */
@@ -574,11 +637,29 @@ public abstract class BaseWrapperManagedConnectionFactory
 
    /**
     * Set the valid connection checker class name
-    * @param value The value
+    * @param validConnectionCheckerClassName The value
     */
-   public void setValidConnectionCheckerClassName(String value)
+   public void setValidConnectionCheckerClassName(String validConnectionCheckerClassName)
    {
-      validConnectionCheckerClassName = value;
+      this.validConnectionCheckerClassName = validConnectionCheckerClassName;
+   }
+
+   /**
+    * Get the valid connection checker class loader
+    * @return The value
+    */
+   public ClassLoader getValidConnectionCheckerClassLoader()
+   {
+      return validConnectionCheckerClassLoader;
+   }
+
+   /**
+    * Set the valid connection checker class name
+    * @param validConnectionCheckerClassLoader The value
+    */
+   public void setValidConnectionCheckerClassLoader(ClassLoader validConnectionCheckerClassLoader)
+   {
+      this.validConnectionCheckerClassLoader = validConnectionCheckerClassLoader;
    }
 
    /**
@@ -1097,7 +1178,7 @@ public abstract class BaseWrapperManagedConnectionFactory
                c = mc.getRealConnection();
                SQLException e = isValidConnection(c);
 
-               if (e != null)
+               if (e != null && poolValidationLoggingEnabled)
                {
                   log.invalidConnection(c.toString(), e);
                   invalid.add(mc);
@@ -1173,7 +1254,7 @@ public abstract class BaseWrapperManagedConnectionFactory
     * @return The configured object
     * @exception Exception Thrown if the plugin couldn't be loaded
     */
-   Object loadPlugin(String plugin, Properties props) throws Exception
+   Object loadPlugin(String plugin, ClassLoader classLoader, Properties props) throws Exception
    {
       if (plugin == null)
          throw new IllegalArgumentException("Plugin is null");
@@ -1182,13 +1263,19 @@ public abstract class BaseWrapperManagedConnectionFactory
          throw new IllegalArgumentException("Plugin isn't defined");
 
       Class<?> clz = null;
-      try
+      if(classLoader != null)
       {
-         clz = Class.forName(plugin, true, getClassLoaderPlugin().getClassLoader());
+         //if class cannot be loaded by provided ClassLoader we throw ClassNotFoundException immediately
+         clz = Class.forName(plugin, true, classLoader);
       }
-      catch (ClassNotFoundException cnfe)
+
+      if (clz == null)
       {
-         // Not found
+         try {
+            clz = Class.forName(plugin, true, getClassLoaderPlugin().getClassLoader());
+         } catch (ClassNotFoundException cnfe) {
+            // Not found
+         }
       }
 
       if (clz == null)
@@ -1246,7 +1333,7 @@ public abstract class BaseWrapperManagedConnectionFactory
          {
             try
             {
-               Object o = loadPlugin(exceptionSorterClassName, exceptionSorterProps);
+               Object o = loadPlugin(exceptionSorterClassName, exceptionSorterClassLoader, exceptionSorterProps);
 
                if (o != null && o instanceof ExceptionSorter)
                {
@@ -1289,7 +1376,7 @@ public abstract class BaseWrapperManagedConnectionFactory
       {
          try
          {
-            Object o = loadPlugin(validConnectionCheckerClassName, validConnectionCheckerProps);
+            Object o = loadPlugin(validConnectionCheckerClassName, validConnectionCheckerClassLoader, validConnectionCheckerProps);
 
             if (o != null && o instanceof ValidConnectionChecker)
             {
@@ -1335,7 +1422,7 @@ public abstract class BaseWrapperManagedConnectionFactory
       {
          try
          {
-            Object o = loadPlugin(staleConnectionCheckerClassName, staleConnectionCheckerProps);
+            Object o = loadPlugin(staleConnectionCheckerClassName, staleConnectionCheckerClassLoader, staleConnectionCheckerProps);
 
             if (o != null && o instanceof StaleConnectionChecker)
             {
@@ -1356,6 +1443,10 @@ public abstract class BaseWrapperManagedConnectionFactory
       }
 
       return false;
+   }
+
+   public void setPoolValidationLoggingEnabled(boolean poolValidationLoggingEnabled) {
+      this.poolValidationLoggingEnabled = poolValidationLoggingEnabled;
    }
 
    /**
@@ -1479,9 +1570,12 @@ public abstract class BaseWrapperManagedConnectionFactory
                         pass = password;
                   }
 
-                  props.setProperty("user", (user == null) ? "" : user);
-                  props.setProperty("password", (pass == null) ? "" : pass);
-               
+                  if (cri != null || userName != null || copyGssCredentials)
+                  {
+                     props.setProperty("user", (user == null) ? "" : user);
+                     props.setProperty("password", (pass == null) ? "" : pass);
+                  }
+
                   return Boolean.TRUE;
                }
             }
@@ -1698,7 +1792,7 @@ public abstract class BaseWrapperManagedConnectionFactory
    /**
     * Set the originalTCCL.
     *
-    * @param clPlugin The clPlugin to set.
+    * @param cl The clPlugin to set.
     */
    public final void setOriginalTCCLn(ClassLoader cl)
    {
