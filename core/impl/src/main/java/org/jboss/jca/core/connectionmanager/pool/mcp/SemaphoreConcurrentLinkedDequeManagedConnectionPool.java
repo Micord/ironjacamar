@@ -1512,7 +1512,10 @@ public class SemaphoreConcurrentLinkedDequeManagedConnectionPool implements Mana
                   {
                      synchronized (cls)
                      {
-                        returnForFrequencyCheck(cl);
+                        if(cl != null && cls.containsKey(cl))
+                        {
+                           returnForFrequencyCheck(cl);
+                        }
                      }
                   }
                }
